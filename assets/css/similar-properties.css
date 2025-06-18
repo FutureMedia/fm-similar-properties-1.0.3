@@ -1,0 +1,31 @@
+
+@media only screen and (min-width: 1024px) {
+    :root {
+        --spacer: 1.75rem;
+        --pr-card-width: 33.3333%;
+    }
+    
+}
+
+.similar-properties {
+    display: flex;
+    flex-wrap: wrap;
+    justify-items: center;
+    padding-bottom: 6em;
+}
+
+.similar-properties h2 {
+    width: 100%;
+    margin-left: var(--spacer);
+    margin-bottom: var(--spacer);
+}
+
+.similar-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, var(--pr-card-width)));
+}
+
+.similar-properties .card-property {
+    width: 100%;
+    margin-bottom: var(--spacer);
+}
