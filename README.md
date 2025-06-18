@@ -1,0 +1,188 @@
+# FM Similar Properties
+
+A WordPress plugin that intelligently displays similar real estate properties based on property type, price range, and location. Built with performance in mind, featuring advanced caching and fallback strategies.
+
+## Features
+
+- **Smart Similarity Matching**: Finds similar properties based on type, location, and price range
+- **Intelligent Price Filtering**: Uses percentage-based price tolerance (configurable)
+- **Multi-layer Caching**: Object cache + transients for optimal performance
+- **Fallback Strategy**: Automatically expands search criteria if insufficient results found
+- **Admin Dashboard**: Settings page with cache management tools
+- **Template Override**: Theme-friendly template system
+- **Debug Support**: Conditional logging for development
+
+## Requirements
+
+- WordPress 5.0+
+- PHP 7.4+
+- **Advanced Custom Fields (ACF)** plugin (required)
+- Custom post type: `properties`
+- Required taxonomies: `pr_type` (property type), `location`
+- Theme functions: `fm_location_tax()` and `nFormat()`
+
+## Installation
+
+1. Upload the plugin files to `/wp-content/plugins/fm-similar-properties/`
+2. Install and activate the Advanced Custom Fields (ACF) plugin
+3. Activate the FM Similar Properties plugin
+4. Configure settings in **Settings → Similar Properties**
+
+## Usage
+
+### Shortcode
+
+Display similar properties using the shortcode:
+
+```
+[similar_properties]
+```
+
+The shortcode automatically detects the current property and displays similar ones.
+
+### Template Override
+
+You can override the property card template by copying `templates/property-card.php` to your theme:
+
+```
+your-theme/fm-similar-properties/property-card.php
+```
+
+## Configuration
+
+### Constants
+
+The plugin uses several configurable constants:
+
+```php
+MAX_SIMILAR_PROPERTIES = 6    // Maximum properties to fetch
+DISPLAY_PROPERTIES = 3        // Maximum properties to display  
+CACHE_DURATION = DAY_IN_SECONDS
+PRICE_TOLERANCE = 10          // Default price tolerance percentage
+```
+
+### Admin Settings
+
+Access settings via **Settings → Similar Properties**:
+
+- **Price Tolerance**: Adjust the percentage range for price matching
+- **Cache Management**: Clear cached results
+- **Debug Information**: View system status and diagnostics
+
+## How It Works
+
+### Similarity Algorithm
+
+1. **Validation**: Ensures source property is published and accessible
+2. **Type Matching**: Filters by property type taxonomy (`pr_type`)
+3. **Location Matching**: Filters by location taxonomy
+4. **Price Filtering**: Applies configurable percentage-based price range
+5. **Fallback**: Removes location constraint if insufficient results
+6. **Randomization**: Shuffles results when more properties found than needed
+
+### Caching Strategy
+
+Two-tier caching system for optimal performance:
+
+1. **Object Cache** (memory-based, fastest)
+2. **Transients** (persistent across requests)
+
+Cache automatically clears when properties are updated.
+
+### Template System
+
+Uses WordPress template hierarchy with override support:
+
+```
+Plugin Template: templates/property-card.php
+Theme Override: your-theme/fm-similar-properties/property-card.php
+```
+
+## Development
+
+### File Structure
+
+```
+fm-similar-properties/
+├── fm-similar-properties.php    # Main plugin file
+├── includes/
+│   ├── query.php               # Property search logic
+│   ├── cache.php               # Caching system
+│   ├── render.php              # Frontend display
+│   ├── admin.php               # Admin interface
+│   └── debug.php               # Debug utilities
+├── templates/
+│   └── property-card.php       # Property card template
+├── assets/
+│   └── css/
+│       └── similar-properties.css
+└── README.md
+```
+
+### Hooks & Filters
+
+**Actions:**
+- `init` - Component loading
+- `wp_enqueue_scripts` - Asset loading
+- `admin_menu` - Settings page
+- `save_post_properties` - Cache clearing
+
+**Filters:**
+- `similar_properties_template_path` - Template override
+
+### Code Standards
+
+- All code namespaced under `SimilarProperties`
+- Input validation and sanitization throughout
+- WordPress coding standards compliance
+- Comprehensive error handling
+
+## Troubleshooting
+
+### Common Issues
+
+**Plugin won't activate:**
+- Ensure ACF plugin is installed and activated
+- Check PHP error logs for dependency issues
+
+**No similar properties displayed:**
+- Verify properties have required ACF fields
+- Check if properties exist with matching criteria
+- Review price tolerance settings
+- Clear cache from admin settings
+
+**Performance issues:**
+- Enable object caching (Redis/Memcached recommended)
+- Adjust `MAX_SIMILAR_PROPERTIES` constant
+- Check server resources
+
+### Debug Mode
+
+Enable debug logging by uncommenting in `fm-similar-properties.php`:
+
+```php
+require_once __DIR__ . '/includes/debug.php';
+```
+
+## Changelog
+
+### Version 1.0.3
+- Improved price tolerance algorithm
+- Enhanced caching performance
+- Added admin dashboard improvements
+- Bug fixes and stability improvements
+
+## Support
+
+For support and feature requests, please contact Future Media:
+- Website: https://futuremedia.gr
+
+## License
+
+This plugin is proprietary software developed by Future Media.
+
+---
+
+**Author**: Future Media  
+**Version**: 1.0.3  
+**Tested up to**: WordPress 6.4
