@@ -115,3 +115,4 @@ add_action('wp_enqueue_scripts', __NAMESPACE__ . '\\enqueue_styles');
 // Keep these hooks
 add_action('admin_menu', __NAMESPACE__ . '\\register_admin_menu');
 add_action('save_post_properties', __NAMESPACE__ . '\\clear_property_cache');
+add_action('acf/save_post', __NAMESPACE__ . '\\clear_property_cache_after_acf_save', 20);

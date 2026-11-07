@@ -22,9 +22,10 @@ function render_similar_properties($atts = []) {
     }
 
     $atts = shortcode_atts(['count' => MAX_SIMILAR_PROPERTIES], $atts);
+    // FM-SIMILAR: cache-ids — this is a live WP_Query rebuilt from cached post IDs, so ->posts and have_posts() are safe.
     $query = get_similar_properties($post_id, MAX_SIMILAR_PROPERTIES); // Always fetch up to 6
 
-    if (!$query || !$query->have_posts()) {
+    if (!$query instanceof \WP_Query || !$query->have_posts()) {
         //debug_log('No similar properties found', null, '⚠️');
         return '';
     }

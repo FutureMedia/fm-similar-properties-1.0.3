@@ -90,7 +90,10 @@ function get_coordinate_index() {
     return $index;
 }
 
-function distance_sorted_query(array $ids) {
+// FM-SIMILAR: cache-ids — rebuild a live WP_Query from stored IDs. A cached WP_Query unserializes as an incomplete object when the object cache starts before class-wp-query.php loads.
+function query_from_ids(array $ids, $sorted_by_distance = false) {
+    $ids = array_values(array_filter(array_map('intval', $ids)));
+
     if (!$ids) {
         // post__in 0 matches nothing. An empty WP_Query constructor would leave query vars unset.
         $query = new \WP_Query([
@@ -99,21 +102,27 @@ function distance_sorted_query(array $ids) {
             'posts_per_page' => 1,
             'no_found_rows'  => true,
         ]);
-        $query->set('sp_sorted_by_distance', 1);
-        return $query;
+    } else {
+        $query = new \WP_Query([
+            'post_type'      => 'properties',
+            'post_status'    => 'publish',
+            'post__in'       => $ids,
+            'orderby'        => 'post__in',
+            'posts_per_page' => count($ids),
+            'no_found_rows'  => true,
+            'has_password'   => false,
+        ]);
     }
 
-    $query = new \WP_Query([
-        'post_type'      => 'properties',
-        'post_status'    => 'publish',
-        'post__in'       => $ids,
-        'orderby'        => 'post__in',
-        'posts_per_page' => count($ids),
-        'no_found_rows'  => true,
-        'has_password'   => false,
-    ]);
-    $query->set('sp_sorted_by_distance', 1);
+    if ($sorted_by_distance) {
+        $query->set('sp_sorted_by_distance', 1);
+    }
+
     return $query;
+}
+
+function distance_sorted_query(array $ids) {
+    return query_from_ids($ids, true);
 }
 
 // FM-SIMILAR: geo-radius — same type and price band, then keep pins inside the radius. No wider radius and no taxonomy fallback.
@@ -194,9 +203,11 @@ function get_similar_properties($post_id, $limit = MAX_SIMILAR_PROPERTIES) {
 
     // debug_log('Starting search', ['post_id' => $post_id, 'limit' => $limit], '🔄');
     
-    // Check the cache first
+    // FM-SIMILAR: cache-ids — a hit is a list of post IDs, turned back into a WP_Query before anything reads ->posts.
     $cached = get_cached_properties($post_id);
-    if ($cached) return $cached;
+    if (is_array($cached)) {
+        return query_from_ids($cached['ids'], !empty($cached['sorted_by_distance']));
+    }
 
     // Get taxonomy terms
     $property_type = wp_get_post_terms($post_id, 'pr_type', ['fields' => 'ids']);
@@ -244,11 +255,11 @@ function get_similar_properties($post_id, $limit = MAX_SIMILAR_PROPERTIES) {
     $coords = get_property_coordinates($post_id);
     if ($coords) {
         $query = query_within_radius($post_id, $coords, $property_type, $min_price, $max_price, $limit);
-        set_cached_properties($post_id, $query);
+        set_cached_properties($post_id, wp_list_pluck($query->posts, 'ID'), true);
         return $query;
     }
 
-    // FM-SIMILAR: no-pin source — fall back to the location taxonomy. Candidates still need a map pin.
+    // FM-SIMILAR: no-pin source — match the location taxonomy, then drop that filter if there are too few. This path does not require a map pin.
     // Main query args
     $args = [
         'post_type'      => 'properties',
@@ -257,18 +268,12 @@ function get_similar_properties($post_id, $limit = MAX_SIMILAR_PROPERTIES) {
         'post_status'    => 'publish',
         'has_password'   => false,
         'meta_query'     => [
-            'relation' => 'AND',
             [
                 'key'     => 'price',
                 'value'   => [$min_price, $max_price],
                 'compare' => 'BETWEEN',
                 'type'    => 'NUMERIC'
-            ],
-            [
-                'key'     => 'location_map',
-                'value'   => '"lat"',
-                'compare' => 'LIKE',
-            ],
+            ]
         ],
         'tax_query' => [
             'relation' => 'AND',
@@ -336,7 +341,7 @@ function get_similar_properties($post_id, $limit = MAX_SIMILAR_PROPERTIES) {
     }
 
     // Cache result
-    set_cached_properties($post_id, $query);
+    set_cached_properties($post_id, wp_list_pluck($query->posts, 'ID'), false);
 
     return $query;
 }
