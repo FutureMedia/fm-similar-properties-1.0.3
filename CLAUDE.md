@@ -65,3 +65,5 @@ The similarity algorithm in `includes/query.php`:
 - Input validation and sanitization implemented throughout
 - Template override system supports theme customization
 - Price handling includes currency symbol cleaning and billion-dollar safety limits
+- Card values use raw numeric/boolean post metadata; ACF formatting filters do not apply to card output
+- Thumbnail posts/metadata are primed only for displayed cards; their images load lazily with async decoding and low priority

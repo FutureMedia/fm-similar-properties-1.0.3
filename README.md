@@ -92,6 +92,12 @@ Properties with map pins skip the location taxonomy lookup. The taxonomy fallbac
 
 A database-backed lock allows one uncached search to rebuild at a time. Cached results remain available; other uncached requests temporarily omit the recommendations section. Locks expire after five minutes if a worker stops before releasing them.
 
+### Card rendering
+
+Only the displayed cards have their thumbnail posts and attachment metadata loaded in a batch. Recommendation images use native lazy loading, asynchronous decoding, and low fetch priority, so cards below the viewport do not compete with the page's main content.
+
+The card reads the numeric fields `property_size`, `land_size`, `bedrooms`, `bathrooms`, and `price`, plus the boolean `hidden_price`, from WordPress post metadata already primed by the recommendation query. This avoids ACF field-definition lookups during card rendering. These fields must remain numeric/boolean; custom ACF formatting filters are not applied to card values. Area rounding, number formatting, and price-on-request behavior remain in the template.
+
 ### Template System
 
 Uses WordPress template hierarchy with override support:
@@ -105,7 +111,7 @@ Theme Override: your-theme/fm-similar-properties/property-card.php
 
 ### Regression checks
 
-Run `php tests/security-regression.php` for isolated checks covering location escaping, admin access, nearest-match selection, ID-range batching, transient expiry, generation invalidation, negative caching, taxonomy fallback, query failures, and rebuild lock ownership and cleanup. These checks use WordPress stubs; they do not replace testing against a running WordPress installation.
+Run `php tests/security-regression.php` for isolated checks covering location escaping, admin access, nearest-match selection, ID-range batching, transient expiry, generation invalidation, negative caching, taxonomy fallback, query failures, rebuild lock ownership and cleanup, card values and price privacy, lazy image attributes, and selected-card thumbnail batching. These checks use WordPress stubs; they do not replace testing against a running WordPress installation.
 
 ### File Structure
 
@@ -173,6 +179,13 @@ require_once __DIR__ . '/includes/debug.php';
 
 ## Changelog
 
+### Version 1.1.4
+- Lazy-load recommendation images with asynchronous decoding and low fetch priority.
+- Batch thumbnail posts and attachment metadata for displayed cards only.
+- Read numeric and boolean card values from primed post metadata instead of repeated ACF field-definition lookups.
+- Preserve card formatting, hidden prices, and nearest-first ordering.
+- Expand security and performance regression coverage to 55 checks.
+
 ### Version 1.1.3
 - Store recommendation results once using expiring WordPress transients.
 - Invalidate caches by generation on saves, settings changes, and manual clears.
@@ -206,5 +219,5 @@ This plugin is proprietary software developed by Future Media.
 ---
 
 **Author**: Future Media  
-**Version**: 1.1.3
+**Version**: 1.1.4
 **Tested up to**: WordPress 6.4

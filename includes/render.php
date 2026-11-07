@@ -52,6 +52,13 @@ function render_similar_properties($atts = []) {
         $posts_to_show = array_slice($posts_to_show, 0, $max_display);
     }
 
+    // Prime attachment posts and metadata once, for the cards that will actually be rendered.
+    $thumbnail_query = new \WP_Query();
+    $thumbnail_query->posts = array_values(array_filter($query->posts, function ($similar) use ($posts_to_show) {
+        return in_array($similar->ID, $posts_to_show, true);
+    }));
+    update_post_thumbnail_cache($thumbnail_query);
+
     // Start output
     echo '<section class="similar-properties">';
     echo '<div class="wrap">';

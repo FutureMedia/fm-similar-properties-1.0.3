@@ -18,7 +18,7 @@ $location = function_exists('fm_location_tax') ? fm_location_tax($similar_id) : 
     <a class="permalink" href="<?php echo esc_url(get_permalink($similar_id)); ?>" rel="bookmark"></a>
 
     <figure role="img" aria-label="<?php echo esc_html($similar->post_title);?>" class="ratio ratio-1x1">
-        <?php echo get_the_post_thumbnail($similar_id, 'medium_large', array('alt' => esc_html($similar->post_title), 'loading' => false)); ?>
+        <?php echo get_the_post_thumbnail($similar_id, 'medium_large', array('alt' => esc_attr($similar->post_title), 'loading' => 'lazy', 'decoding' => 'async', 'fetchpriority' => 'low')); ?>
     </figure>
 
     <div class="card-body">
@@ -31,11 +31,13 @@ $location = function_exists('fm_location_tax') ? fm_location_tax($similar_id) : 
         </address>
 
         <?php
-        // Get all field values once to avoid multiple database queries
-        $pr_size_raw = get_field('property_size', $similar_id);
-        $l_size_raw  = get_field('land_size', $similar_id);
-        $bedrooms_raw = get_field('bedrooms', $similar_id);
-        $baths_raw   = get_field('bathrooms', $similar_id);
+        // These numeric/boolean fields need no ACF formatting; WP_Query has primed their metadata.
+        $pr_size_raw = get_post_meta($similar_id, 'property_size', true);
+        $l_size_raw  = get_post_meta($similar_id, 'land_size', true);
+        $bedrooms_raw = get_post_meta($similar_id, 'bedrooms', true);
+        $baths_raw   = get_post_meta($similar_id, 'bathrooms', true);
+        $hidden_price = get_post_meta($similar_id, 'hidden_price', true);
+        $price = get_post_meta($similar_id, 'price', true);
         
         $pr_size     = $pr_size_raw ? round(floatval($pr_size_raw)) : 'n.a.';
         $l_size      = $l_size_raw ? round(floatval($l_size_raw)) : 'n.a.';
@@ -59,13 +61,12 @@ $location = function_exists('fm_location_tax') ? fm_location_tax($similar_id) : 
     <div class="card-footer">
 
         <?php
-        if (get_field('hidden_price', $similar_id) || empty(get_field('price', $similar_id))) :
+        if ($hidden_price || empty($price)) :
             echo '<span class="poa">';
             _e('Price on request', 'fmedia');
             echo '</span>';
-        else :
-            $price = get_field('price', $similar_id); ?>
-            <span class="price number no-glot" data-price="<?php echo esc_html($price); ?>">
+        else : ?>
+            <span class="price number no-glot" data-price="<?php echo esc_attr($price); ?>">
                 <?php echo nFormat($price, 'el_EL') ?> <small>&euro;</small>
             </span>
         <?php

@@ -2,6 +2,7 @@
 // Isolated regression checks: php tests/security-regression.php (no WordPress install required).
 define('ABSPATH', __DIR__);
 define('SimilarProperties\MAX_SIMILAR_PROPERTIES', 6);
+define('SimilarProperties\DISPLAY_PROPERTIES', 3);
 define('SimilarProperties\CACHE_DURATION', 86400);
 $GLOBALS['options'] = [];
 $GLOBALS['cache'] = [];
@@ -11,6 +12,9 @@ $GLOBALS['expires'] = [];
 $GLOBALS['term_calls'] = [];
 $GLOBALS['filters'] = [];
 $GLOBALS['fields'] = [];
+$GLOBALS['card_metadata'] = [];
+$GLOBALS['acf_calls'] = 0;
+$GLOBALS['thumbnail_calls'] = [];
 $GLOBALS['types'] = [1];
 $GLOBALS['has_pin'] = true;
 $GLOBALS['candidates'] = range(1, 405);
@@ -85,6 +89,7 @@ class WP_Query {
     }
     function set($key, $value) { $this->args[$key] = $value; }
     function get($key) { return $this->args[$key] ?? ''; }
+    function have_posts() { return !empty($this->posts); }
 }
 function add_filter($tag, $callback, $priority = 10, $accepted = 1) { $GLOBALS['filters'][$tag][] = $callback; }
 function remove_filter($tag, $callback, $priority = 10) {
@@ -121,7 +126,10 @@ function is_serialized($value) { return is_string($value) && preg_match('/^[aOsi
 function get_post_type($id) { return 'properties'; }
 function get_post_status($id) { return 'publish'; }
 function post_password_required($id) { return false; }
-function get_post_meta($id, $key, $single) { return $GLOBALS['has_pin'] ? ['lat' => 38, 'lng' => 23] : ''; }
+function get_post_meta($id, $key, $single) {
+    if ($key === 'location_map') { return $GLOBALS['has_pin'] ? ['lat' => 38, 'lng' => 23] : ''; }
+    return $GLOBALS['card_metadata'][$key] ?? ($key === 'price' ? '100' : ($key === 'hidden_price' ? '1' : ''));
+}
 function wp_get_post_terms($id, $taxonomy, $args) {
     $GLOBALS['term_calls'][] = $taxonomy;
     if (!empty($GLOBALS['throw_terms'])) { throw new RuntimeException('query failure'); }
@@ -132,20 +140,31 @@ function wp_get_post_terms($id, $taxonomy, $args) {
     return $taxonomy === 'pr_type' ? $GLOBALS['types'] : [2];
 }
 function wp_list_pluck($posts, $key) { return array_map(function ($p) use ($key) { return $p->$key; }, $posts); }
-function get_field($key, $id) { return $GLOBALS['fields'][$key] ?? ($key === 'price' ? 100 : ($key === 'hidden_price')); }
+function get_field($key, $id) { $GLOBALS['acf_calls']++; return $GLOBALS['fields'][$key] ?? ($key === 'price' ? 100 : ($key === 'hidden_price')); }
 function add_action(...$args) {}
 function current_user_can($cap) { return false; }
 function wp_die($message, $title, $args) { throw new RuntimeException('HTTP ' . $args['response']); }
 function fm_location_tax($id) { return ['name' => '<img src=x onerror="alert(1)">']; }
 function esc_html($value) { return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8'); }
 function esc_url($value) { return esc_html($value); }
+function esc_attr($value) { return esc_html($value); }
+function esc_js($value) { return (string) $value; }
 function get_permalink($id) { return 'https://example.test/property'; }
-function get_the_post_thumbnail(...$args) { return ''; }
+function get_the_post_thumbnail($id, $size, $attrs) {
+    $GLOBALS['thumbnail_calls'][] = ['id' => $id, 'attrs' => $attrs];
+    return '<img src="https://example.test/thumbnail.jpg" loading="' . esc_attr($attrs['loading']) . '" decoding="' . esc_attr($attrs['decoding']) . '" fetchpriority="' . esc_attr($attrs['fetchpriority']) . '">';
+}
+function update_post_thumbnail_cache($query) { $GLOBALS['primed_thumbnail_ids'] = wp_list_pluck($query->posts, 'ID'); }
+function is_singular($type) { return $type === 'properties'; }
+function shortcode_atts($defaults, $atts) { return array_merge($defaults, $atts); }
+function get_post($id) { return (object)['ID' => $id, 'post_title' => 'Property ' . $id]; }
+function plugin_dir_path($file) { return dirname($file) . '/'; }
 function nFormat($value, ...$args) { return (string)$value; }
 function _e($value, ...$args) { echo $value; }
 require __DIR__ . '/../includes/query.php';
 require __DIR__ . '/../includes/cache.php';
 require __DIR__ . '/../includes/admin.php';
+require __DIR__ . '/../includes/render.php';
 
 $first = SimilarProperties\acquire_rebuild_lock();
 check(is_string($first), 'first rebuild acquires lock');
@@ -285,4 +304,36 @@ SimilarProperties\clear_property_cache_after_acf_save(1502);
 $GLOBALS['term_calls'] = [];
 SimilarProperties\get_similar_properties(1502);
 check($GLOBALS['term_calls'] === ['pr_type'], 'saving corrected property bypasses negative cache immediately');
+$GLOBALS['card_metadata'] = ['property_size' => '245.4', 'land_size' => '460.2', 'bedrooms' => '3', 'bathrooms' => '5', 'hidden_price' => '0', 'price' => '2800000'];
+$acf_calls_before_card = $GLOBALS['acf_calls'];
+ob_start();
+include __DIR__ . '/../templates/property-card.php';
+$card_html = ob_get_clean();
+check($GLOBALS['acf_calls'] === $acf_calls_before_card, 'card rendering performs no ACF field-definition lookups');
+check(strpos($card_html, 'data-unit="245"') !== false && strpos($card_html, 'data-unit="460"') !== false && strpos($card_html, 'data-price="2800000"') !== false, 'raw metadata preserves rounded areas and visible price');
+check(strpos($card_html, 'loading="lazy"') !== false && strpos($card_html, 'decoding="async"') !== false && strpos($card_html, 'fetchpriority="low"') !== false, 'recommendation images are lazy, asynchronous, and low priority');
+$GLOBALS['card_metadata']['hidden_price'] = '1';
+ob_start();
+include __DIR__ . '/../templates/property-card.php';
+$hidden_html = ob_get_clean();
+check(strpos($hidden_html, 'Price on request') !== false && strpos($hidden_html, 'data-price=') === false, 'hidden prices remain absent from card HTML');
+$GLOBALS['card_metadata']['hidden_price'] = '0';
+$GLOBALS['card_metadata']['price'] = '0';
+ob_start();
+include __DIR__ . '/../templates/property-card.php';
+$zero_html = ob_get_clean();
+check(strpos($zero_html, 'Price on request') !== false, 'zero price still uses price-on-request fallback');
+$GLOBALS['card_metadata']['property_size'] = '';
+ob_start();
+include __DIR__ . '/../templates/property-card.php';
+$empty_html = ob_get_clean();
+check(strpos($empty_html, 'data-unit="n.a."') !== false, 'missing area retains unavailable fallback');
+$GLOBALS['post'] = (object)['ID' => 1600];
+SimilarProperties\set_cached_properties(1600, [1, 2, 3, 4, 5, 6], true);
+$GLOBALS['thumbnail_calls'] = [];
+$acf_calls_before_shortcode = $GLOBALS['acf_calls'];
+$shortcode_html = SimilarProperties\render_similar_properties();
+check($GLOBALS['primed_thumbnail_ids'] === [1, 2, 3], 'thumbnail priming covers only the three selected cards');
+check(array_column($GLOBALS['thumbnail_calls'], 'id') === [1, 2, 3] && substr_count($shortcode_html, 'class="card card-property"') === 3, 'batched thumbnail loading preserves closest-first card order');
+check($GLOBALS['post']->ID === 1600 && $GLOBALS['acf_calls'] === $acf_calls_before_shortcode, 'cached shortcode preserves global post and avoids ACF lookups');
 echo "All security and performance regression checks passed.\n";
