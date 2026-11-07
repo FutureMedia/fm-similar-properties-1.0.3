@@ -63,7 +63,13 @@ add_action('admin_init', function () {
         'type' => 'number',
         'sanitize_callback' => function ($val) {
             $val = floatval($val);
-            return ($val > 0 && $val <= 100) ? $val : 10;
+            $val = ($val > 0 && $val <= 100) ? $val : 10;
+            // FM-SIMILAR: price-tolerance — cached matches were built with the previous band.
+            $current = get_option('sp_price_tolerance', 10);
+            if ((float) $current !== (float) $val) {
+                clear_all_caches();
+            }
+            return $val;
         },
         'default' => 10
     ]);
