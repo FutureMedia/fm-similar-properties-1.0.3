@@ -4,15 +4,51 @@ namespace SimilarProperties;
 
 if (!defined('ABSPATH')) exit;
 
+// The unique options-table key provides a cross-worker lock without an object cache.
+function acquire_rebuild_lock() {
+    global $wpdb;
+    $key = 'sp_rebuild_lock';
+    $token = wp_json_encode(['owner' => wp_generate_uuid4(), 'expires' => time() + 300]);
+    // Read the database directly so a stale options cache cannot affect ownership.
+    $existing = $wpdb->get_var($wpdb->prepare(
+        "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s",
+        $key
+    ));
+    if ($existing !== null) {
+        $data = json_decode($existing, true);
+        if (is_array($data) && isset($data['expires']) && $data['expires'] > time()) {
+            return false;
+        }
+        // Delete only the expired value we observed, never a newer worker's lock.
+        release_rebuild_lock($existing);
+    }
+
+    // INSERT IGNORE cannot replace a lock acquired between the read and this insert.
+    $inserted = $wpdb->query($wpdb->prepare(
+        "INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, %s)",
+        $key,
+        $token,
+        'no'
+    ));
+    return $inserted === 1 ? $token : false;
+}
+
+function release_rebuild_lock($token) {
+    global $wpdb;
+    $deleted = $wpdb->query($wpdb->prepare(
+        "DELETE FROM {$wpdb->options} WHERE option_name = %s AND option_value = %s",
+        'sp_rebuild_lock',
+        $token
+    ));
+    if ($deleted) {
+        wp_cache_delete('sp_rebuild_lock', 'options');
+    }
+}
+
 function clear_property_cache($post_id) {
     $cache_key = 'sp_similar_r_' . $post_id;
     delete_transient($cache_key);
     wp_cache_delete($cache_key);
-
-    // FM-SIMILAR: coordinate-index — only a property with a map pin can change who is nearby.
-    if (function_exists(__NAMESPACE__ . '\\get_property_coordinates') && get_property_coordinates($post_id)) {
-        delete_transient('sp_coordinate_index');
-    }
 }
 
 function clear_property_cache_after_acf_save($post_id) {

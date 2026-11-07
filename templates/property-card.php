@@ -27,7 +27,7 @@ $location = function_exists('fm_location_tax') ? fm_location_tax($similar_id) : 
 
         <address>
             <span><i class="fui-location"></i></span>
-            <span><?php echo $location['name'] ?? ''; ?></span>
+            <span><?php echo esc_html($location['name'] ?? ''); ?></span>
         </address>
 
         <?php

@@ -48,46 +48,42 @@ function distance_km($lat1, $lng1, $lat2, $lng2) {
     $a = sin($lat_delta / 2) ** 2
         + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($lng_delta / 2) ** 2;
 
+    $a = max(0.0, min(1.0, $a));
     return $earth_radius * (2 * atan2(sqrt($a), sqrt(1 - $a)));
 }
 
-// FM-SIMILAR: coordinate-index — one shared list of published pins, rebuilt when a property is saved.
-function get_coordinate_index() {
-    $index = get_transient('sp_coordinate_index');
-    if (is_array($index)) {
-        return $index;
+// Fetch only this batch's pins; avoid loading every property's metadata into memory.
+function get_coordinates_for_ids(array $ids) {
+    if (!$ids) {
+        return [];
     }
 
     global $wpdb;
+    $placeholders = implode(',', array_fill(0, count($ids), '%d'));
     $rows = $wpdb->get_results($wpdb->prepare(
-        "SELECT pm.post_id, pm.meta_value
-         FROM {$wpdb->postmeta} pm
-         INNER JOIN {$wpdb->posts} p ON p.ID = pm.post_id
-         WHERE pm.meta_key = %s
-           AND p.post_type = %s
-           AND p.post_status = %s
-           AND p.post_password = ''",
-        'location_map',
-        'properties',
-        'publish'
+        "SELECT post_id, meta_value FROM {$wpdb->postmeta}
+         WHERE meta_key = %s AND post_id IN ($placeholders)",
+        array_merge(['location_map'], array_map('intval', $ids))
     ));
 
-    $index = [];
+    $coordinates = [];
     foreach ($rows as $row) {
-        $map = maybe_unserialize($row->meta_value);
+        // ACF maps contain arrays of scalars. Never instantiate objects from stored metadata.
+        $map = is_serialized($row->meta_value)
+            ? unserialize(trim($row->meta_value), ['allowed_classes' => false])
+            : null;
         if (!is_array($map) || !isset($map['lat'], $map['lng']) || !is_numeric($map['lat']) || !is_numeric($map['lng'])) {
             continue;
         }
         $lat = (float) $map['lat'];
         $lng = (float) $map['lng'];
-        if ($lat < -90 || $lat > 90 || $lng < -180 || $lng > 180 || ($lat === 0.0 && $lng === 0.0)) {
+        if (!is_finite($lat) || !is_finite($lng) || $lat < -90 || $lat > 90 || $lng < -180 || $lng > 180 || ($lat === 0.0 && $lng === 0.0)) {
             continue;
         }
-        $index[(int) $row->post_id] = [$lat, $lng];
+        $coordinates[(int) $row->post_id] = [$lat, $lng];
     }
 
-    set_transient('sp_coordinate_index', $index, CACHE_DURATION);
-    return $index;
+    return $coordinates;
 }
 
 // FM-SIMILAR: cache-ids — rebuild a live WP_Query from stored IDs. A cached WP_Query unserializes as an incomplete object when the object cache starts before class-wp-query.php loads.
@@ -128,11 +124,15 @@ function distance_sorted_query(array $ids) {
 // FM-SIMILAR: geo-radius — same type and price band, then keep pins inside the radius. No wider radius and no taxonomy fallback.
 function query_within_radius($post_id, array $origin, $property_type, $min_price, $max_price, $limit) {
     $radius = get_search_radius_km();
-    $index = get_coordinate_index();
-
-    $candidate_ids = (new \WP_Query([
+    $limit = max(1, min(MAX_SIMILAR_PROPERTIES, (int) $limit));
+    $batch_size = 200;
+    $args = [
         'post_type'              => 'properties',
-        'posts_per_page'         => -1,
+        'posts_per_page'         => $batch_size,
+        'orderby'                => 'ID',
+        'order'                  => 'ASC',
+        'cache_results'          => false,
+        'update_post_meta_cache' => false,
         'post__not_in'           => [$post_id],
         'post_status'            => 'publish',
         'has_password'           => false,
@@ -154,27 +154,35 @@ function query_within_radius($post_id, array $origin, $property_type, $min_price
                 'terms'    => $property_type,
             ],
         ],
-    ]))->posts;
+    ];
 
+    // Bound per-query memory and retain only the closest matches across all batches.
     $nearby = [];
-    foreach ($candidate_ids as $candidate_id) {
-        $candidate_id = (int) $candidate_id;
-        if (!isset($index[$candidate_id])) {
-            continue;
+    $args['offset'] = 0;
+    do {
+        $candidate_ids = (new \WP_Query($args))->posts;
+        $coordinates = get_coordinates_for_ids($candidate_ids);
+        foreach ($candidate_ids as $candidate_id) {
+            $candidate_id = (int) $candidate_id;
+            if (!isset($coordinates[$candidate_id])) {
+                continue;
+            }
+            [$lat, $lng] = $coordinates[$candidate_id];
+            $distance = distance_km($origin['lat'], $origin['lng'], $lat, $lng);
+            if ($distance <= $radius) {
+                $nearby[] = ['id' => $candidate_id, 'distance' => $distance];
+            }
         }
-        [$lat, $lng] = $index[$candidate_id];
-        $distance = distance_km($origin['lat'], $origin['lng'], $lat, $lng);
-        if ($distance <= $radius) {
-            $nearby[] = ['id' => $candidate_id, 'distance' => $distance];
-        }
-    }
 
-    usort($nearby, function ($a, $b) {
-        if ($a['distance'] === $b['distance']) {
-            return $a['id'] <=> $b['id'];
-        }
-        return $a['distance'] <=> $b['distance'];
-    });
+        usort($nearby, function ($a, $b) {
+            if ($a['distance'] === $b['distance']) {
+                return $a['id'] <=> $b['id'];
+            }
+            return $a['distance'] <=> $b['distance'];
+        });
+        $nearby = array_slice($nearby, 0, $limit);
+        $args['offset'] += $batch_size;
+    } while (count($candidate_ids) === $batch_size);
 
     $ids = array_column(array_slice($nearby, 0, $limit), 'id');
     return distance_sorted_query($ids);
@@ -209,6 +217,26 @@ function get_similar_properties($post_id, $limit = MAX_SIMILAR_PROPERTIES) {
         return query_from_ids($cached['ids'], !empty($cached['sorted_by_distance']));
     }
 
+    // One rebuild at a time, including across different property pages and PHP workers.
+    $lock = acquire_rebuild_lock();
+    if ($lock === false) {
+        return false;
+    }
+
+    try {
+        // Another worker may have filled this cache before we acquired the lock.
+        $cached = get_cached_properties($post_id);
+        if (is_array($cached)) {
+            return query_from_ids($cached['ids'], !empty($cached['sorted_by_distance']));
+        }
+        return build_similar_properties($post_id, $limit);
+    } finally {
+        release_rebuild_lock($lock);
+    }
+}
+
+function build_similar_properties($post_id, $limit) {
+    $limit = max(1, min(MAX_SIMILAR_PROPERTIES, (int) $limit));
     // Get taxonomy terms
     $property_type = wp_get_post_terms($post_id, 'pr_type', ['fields' => 'ids']);
     $location = wp_get_post_terms($post_id, 'location', ['fields' => 'ids']);

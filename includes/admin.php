@@ -15,6 +15,11 @@ function register_admin_menu() {
 }
 
 function render_admin_page() {
+    if (!current_user_can('manage_options')) {
+        wp_die('You are not allowed to manage these settings.', '', ['response' => 403]);
+        return;
+    }
+
     // Handle cache clearing
     if (isset($_POST['clear_sp_cache']) && check_admin_referer('sp_clear_cache')) {
         $cleared = clear_all_caches();

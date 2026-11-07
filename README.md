@@ -89,6 +89,10 @@ Two-tier caching system for optimal performance:
 
 Cache automatically clears when properties are updated.
 
+Distance searches read candidates and their map pins in batches of 200, retaining only the closest matches across all batches. This bounds PHP memory without truncating the candidate set. Total search time still depends on inventory size.
+
+A database-backed lock allows one uncached search to rebuild at a time. Cached results remain available; other uncached requests temporarily omit the recommendations section. Locks expire after five minutes if a worker stops before releasing them.
+
 ### Template System
 
 Uses WordPress template hierarchy with override support:
@@ -99,6 +103,10 @@ Theme Override: your-theme/fm-similar-properties/property-card.php
 ```
 
 ## Development
+
+### Security regression checks
+
+Run `php tests/security-regression.php` for isolated checks covering location escaping, admin access, batched nearest-match selection, and rebuild lock contention, expiry, and cleanup. These checks use WordPress stubs; they do not replace testing against a running WordPress installation.
 
 ### File Structure
 
@@ -166,6 +174,13 @@ require_once __DIR__ . '/includes/debug.php';
 
 ## Changelog
 
+### Version 1.1.2
+- Escape property location names in recommendation cards.
+- Enforce administrator permissions inside the settings page callback.
+- Process distance matches in batches of 200 while preserving nearest-first results.
+- Serialize uncached searches with an expiring database lock to reduce concurrent rebuild load.
+- Add isolated security regression checks.
+
 ### Version 1.0.3
 - Improved price tolerance algorithm
 - Enhanced caching performance
@@ -184,5 +199,5 @@ This plugin is proprietary software developed by Future Media.
 ---
 
 **Author**: Future Media  
-**Version**: 1.0.3  
+**Version**: 1.1.2
 **Tested up to**: WordPress 6.4
