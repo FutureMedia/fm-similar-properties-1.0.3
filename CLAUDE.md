@@ -12,7 +12,7 @@ The plugin follows a modular architecture with clear separation of concerns:
 
 - **Main Plugin File**: `fm-similar-properties.php` - Plugin bootstrap, dependency checking, and asset loading
 - **Query Logic**: `includes/query.php` - Property search with fallback strategies and price filtering
-- **Caching System**: `includes/cache.php` - Multi-layer caching (object cache + transients)
+- **Caching System**: `includes/cache.php` - Expiring WordPress transients and generation invalidation
 - **Frontend Display**: `includes/render.php` - Shortcode handling and template rendering
 - **Admin Interface**: `includes/admin.php` - Settings page and cache management
 - **Debug Utilities**: `includes/debug.php` - Conditional logging for development
@@ -35,11 +35,11 @@ PRICE_TOLERANCE = 20          // Default price tolerance percentage (20%)
 
 ## Caching Strategy
 
-The plugin implements a two-tier caching system:
-1. **Object Cache** (fastest, memory-based)
-2. **Transients** (persistent across requests)
+The plugin stores recommendation IDs with the WordPress Transients API, which automatically uses persistent object caching when available. Normal results expire after one day; invalid prices and missing property types are cached for five minutes. Errors and rebuild contention are not cached.
 
-Cache keys follow pattern: `sp_similar_{post_id}`
+Keys follow `sp_similar_v2_{generation}_{post_id}`. Property saves, settings changes, and manual clears replace the generation, invalidating all related recommendations without scanning storage. In-flight rebuilds retain their original generation. A database-backed lock serializes uncached rebuilds.
+
+Distance searches use ID ranges in batches of 200 and keep the closest six matches. Map-based searches do not fetch location taxonomy terms. Taxonomy queries skip total row counts and use the returned count to decide whether fallback is needed.
 
 ## WordPress Hooks Used
 

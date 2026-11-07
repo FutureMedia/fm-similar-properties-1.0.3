@@ -22,11 +22,11 @@ function render_admin_page() {
 
     // Handle cache clearing
     if (isset($_POST['clear_sp_cache']) && check_admin_referer('sp_clear_cache')) {
-        $cleared = clear_all_caches();
+        clear_all_caches();
         add_settings_error(
             'sp_messages',
             'sp_cache_cleared',
-            sprintf('Cache cleared. Removed %d items.', $cleared),
+            'Cache cleared. Recommendations will refresh on the next visit.',
             'updated'
         );
     }

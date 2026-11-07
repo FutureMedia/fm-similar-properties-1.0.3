@@ -66,6 +66,10 @@ function get_coordinates_for_ids(array $ids) {
         array_merge(['location_map'], array_map('intval', $ids))
     ));
 
+    if ($rows === null || $wpdb->last_error) {
+        return false;
+    }
+
     $coordinates = [];
     foreach ($rows as $row) {
         // ACF maps contain arrays of scalars. Never instantiate objects from stored metadata.
@@ -121,6 +125,26 @@ function distance_sorted_query(array $ids) {
     return query_from_ids($ids, true);
 }
 
+// Restrict the ID range only for this query instance, including during nested queries.
+function query_candidate_batch(array $args, $last_id) {
+    global $wpdb;
+    $query = new \WP_Query();
+    $where_filter = function ($where, $current_query) use ($query, $last_id, $wpdb) {
+        if ($current_query === $query) {
+            $where .= $wpdb->prepare(" AND {$wpdb->posts}.ID > %d", $last_id);
+        }
+        return $where;
+    };
+
+    add_filter('posts_where', $where_filter, 10, 2);
+    try {
+        $query->query($args);
+        return $wpdb->last_error ? false : $query->posts;
+    } finally {
+        remove_filter('posts_where', $where_filter, 10);
+    }
+}
+
 // FM-SIMILAR: geo-radius — same type and price band, then keep pins inside the radius. No wider radius and no taxonomy fallback.
 function query_within_radius($post_id, array $origin, $property_type, $min_price, $max_price, $limit) {
     $radius = get_search_radius_km();
@@ -158,10 +182,16 @@ function query_within_radius($post_id, array $origin, $property_type, $min_price
 
     // Bound per-query memory and retain only the closest matches across all batches.
     $nearby = [];
-    $args['offset'] = 0;
+    $last_id = 0;
     do {
-        $candidate_ids = (new \WP_Query($args))->posts;
+        $candidate_ids = query_candidate_batch($args, $last_id);
+        if ($candidate_ids === false) {
+            return false;
+        }
         $coordinates = get_coordinates_for_ids($candidate_ids);
+        if ($coordinates === false) {
+            return false;
+        }
         foreach ($candidate_ids as $candidate_id) {
             $candidate_id = (int) $candidate_id;
             if (!isset($coordinates[$candidate_id])) {
@@ -181,7 +211,13 @@ function query_within_radius($post_id, array $origin, $property_type, $min_price
             return $a['distance'] <=> $b['distance'];
         });
         $nearby = array_slice($nearby, 0, $limit);
-        $args['offset'] += $batch_size;
+        if ($candidate_ids) {
+            $next_id = (int) max($candidate_ids);
+            if ($next_id <= $last_id) {
+                return false; // Do not loop forever if another query filter removes ordering.
+            }
+            $last_id = $next_id;
+        }
     } while (count($candidate_ids) === $batch_size);
 
     $ids = array_column(array_slice($nearby, 0, $limit), 'id');
@@ -212,7 +248,8 @@ function get_similar_properties($post_id, $limit = MAX_SIMILAR_PROPERTIES) {
     // debug_log('Starting search', ['post_id' => $post_id, 'limit' => $limit], '🔄');
     
     // FM-SIMILAR: cache-ids — a hit is a list of post IDs, turned back into a WP_Query before anything reads ->posts.
-    $cached = get_cached_properties($post_id);
+    $generation = get_cache_generation();
+    $cached = get_cached_properties($post_id, $generation);
     if (is_array($cached)) {
         return query_from_ids($cached['ids'], !empty($cached['sorted_by_distance']));
     }
@@ -225,28 +262,34 @@ function get_similar_properties($post_id, $limit = MAX_SIMILAR_PROPERTIES) {
 
     try {
         // Another worker may have filled this cache before we acquired the lock.
-        $cached = get_cached_properties($post_id);
+        $cached = get_cached_properties($post_id, $generation);
         if (is_array($cached)) {
             return query_from_ids($cached['ids'], !empty($cached['sorted_by_distance']));
         }
-        return build_similar_properties($post_id, $limit);
+        return build_similar_properties($post_id, $limit, $generation);
     } finally {
         release_rebuild_lock($lock);
     }
 }
 
-function build_similar_properties($post_id, $limit) {
+function build_similar_properties($post_id, $limit, $generation = null) {
+    global $wpdb;
     $limit = max(1, min(MAX_SIMILAR_PROPERTIES, (int) $limit));
     // Get taxonomy terms
     $property_type = wp_get_post_terms($post_id, 'pr_type', ['fields' => 'ids']);
-    $location = wp_get_post_terms($post_id, 'location', ['fields' => 'ids']);
-    if (empty($property_type)) {
-        // debug_log('No property type found', ['post_id' => $post_id], '⚠️');
+    if (is_wp_error($property_type) || $wpdb->last_error) {
         return false;
+    }
+    if (empty($property_type)) {
+        set_cached_properties($post_id, [], false, 300, $generation);
+        return query_from_ids([]);
     }
 
     // Get and clean price
     $price_raw = get_field('price', $post_id);
+    if ($wpdb->last_error) {
+        return false;
+    }
     $price = clean_price($price_raw);
     /*
     debug_log('Price info', [
@@ -256,14 +299,11 @@ function build_similar_properties($post_id, $limit) {
     ], '💰');
     */
 
-    // Bail out if price is too high (corrupt)
-    if ($price > 1000000000) {
-        error_log("❌ Price too high ($price) — aborting query for post ID $post_id");
-        return false;
+    // Incomplete listings cannot match until their data changes; retry after five minutes.
+    if (!is_finite($price) || $price < 1 || $price > 1000000000) {
+        set_cached_properties($post_id, [], false, 300, $generation);
+        return query_from_ids([]);
     }
-
-    // Bail out if price invalid
-    if (!$price || $price < 1) return false;
 
     // Load tolerance percentage from settings (default 10%)
     $tolerance_percentage = get_option('sp_price_tolerance', 10);
@@ -281,17 +321,29 @@ function build_similar_properties($post_id, $limit) {
 
     // FM-SIMILAR: geo-radius — a listing with a map pin is matched by distance. Closest results are returned in order.
     $coords = get_property_coordinates($post_id);
+    if ($wpdb->last_error) {
+        return false;
+    }
     if ($coords) {
         $query = query_within_radius($post_id, $coords, $property_type, $min_price, $max_price, $limit);
-        set_cached_properties($post_id, wp_list_pluck($query->posts, 'ID'), true);
+        if (!$query instanceof \WP_Query || $wpdb->last_error) {
+            return false;
+        }
+        set_cached_properties($post_id, wp_list_pluck($query->posts, 'ID'), true, CACHE_DURATION, $generation);
         return $query;
     }
 
     // FM-SIMILAR: no-pin source — match the location taxonomy, then drop that filter if there are too few. This path does not require a map pin.
+    $location = wp_get_post_terms($post_id, 'location', ['fields' => 'ids']);
+    if (is_wp_error($location) || $wpdb->last_error) {
+        return false;
+    }
+
     // Main query args
     $args = [
         'post_type'      => 'properties',
         'posts_per_page' => $limit,
+        'no_found_rows'  => true,
         'post__not_in'   => [$post_id],
         'post_status'    => 'publish',
         'has_password'   => false,
@@ -330,10 +382,6 @@ function build_similar_properties($post_id, $limit) {
     ], '🔍');
     */
 
-    global $wpdb;
-
-
-
     $query = new \WP_Query($args);
     /*
     debug_log('Query results', [
@@ -348,7 +396,10 @@ function build_similar_properties($post_id, $limit) {
     // remove_filter('get_meta_sql', __NAMESPACE__ . '\log_meta_sql', 999);
 
     // Fallback: drop location filter if too few results
-    if ($query->found_posts < $limit) {
+    if ($wpdb->last_error) {
+        return false;
+    }
+    if ($query->post_count < $limit) {
         /*
         debug_log('Insufficient results, trying without location', [
             'found' => $query->found_posts,
@@ -369,7 +420,10 @@ function build_similar_properties($post_id, $limit) {
     }
 
     // Cache result
-    set_cached_properties($post_id, wp_list_pluck($query->posts, 'ID'), false);
+    if ($wpdb->last_error) {
+        return false;
+    }
+    set_cached_properties($post_id, wp_list_pluck($query->posts, 'ID'), false, CACHE_DURATION, $generation);
 
     return $query;
 }

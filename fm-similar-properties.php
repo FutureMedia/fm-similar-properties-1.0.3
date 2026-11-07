@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FM - Similar Properties
  * Description: Custom plugin for displaying similar properties based on type, price range, and distance from the map pin.
- * Version: 1.1.2
+ * Version: 1.1.3
  * Author: Future Media
  * Author URI: https://futuremedia.gr
  */

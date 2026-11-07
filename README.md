@@ -6,7 +6,7 @@ A WordPress plugin that intelligently displays similar real estate properties ba
 
 - **Smart Similarity Matching**: Finds similar properties based on type, location, and price range
 - **Intelligent Price Filtering**: Uses percentage-based price tolerance (configurable)
-- **Multi-layer Caching**: Object cache + transients for optimal performance
+- **Expiring Caching**: WordPress transients with automatic persistent-cache support
 - **Fallback Strategy**: Automatically expands search criteria if insufficient results found
 - **Admin Dashboard**: Settings page with cache management tools
 - **Template Override**: Theme-friendly template system
@@ -82,14 +82,13 @@ Access settings via **Settings → Similar Properties**:
 
 ### Caching Strategy
 
-Two-tier caching system for optimal performance:
+Recommendation IDs are stored once using the WordPress Transients API. WordPress uses its persistent object cache automatically when available, or database transients otherwise. Normal results expire after one day; missing property types and invalid prices are cached for five minutes. Query errors and lock contention are never stored as empty recommendations.
 
-1. **Object Cache** (memory-based, fastest)
-2. **Transients** (persistent across requests)
+Property saves, settings changes, and the Clear Cache action switch the cache generation. This invalidates results across all property pages without enumerating database or persistent-cache entries. Old entries expire naturally. An in-flight rebuild writes to the generation it started with.
 
-Cache automatically clears when properties are updated.
+Distance searches read candidates and their map pins in batches of 200, retaining only the closest matches across all batches. Each batch starts after the previous batch's highest post ID, avoiding increasing database offsets. This bounds PHP memory without truncating the candidate set. Total search time still depends on inventory size.
 
-Distance searches read candidates and their map pins in batches of 200, retaining only the closest matches across all batches. This bounds PHP memory without truncating the candidate set. Total search time still depends on inventory size.
+Properties with map pins skip the location taxonomy lookup. The taxonomy fallback uses the returned result count rather than counting every matching row in the database.
 
 A database-backed lock allows one uncached search to rebuild at a time. Cached results remain available; other uncached requests temporarily omit the recommendations section. Locks expire after five minutes if a worker stops before releasing them.
 
@@ -104,9 +103,9 @@ Theme Override: your-theme/fm-similar-properties/property-card.php
 
 ## Development
 
-### Security regression checks
+### Regression checks
 
-Run `php tests/security-regression.php` for isolated checks covering location escaping, admin access, batched nearest-match selection, and rebuild lock contention, expiry, and cleanup. These checks use WordPress stubs; they do not replace testing against a running WordPress installation.
+Run `php tests/security-regression.php` for isolated checks covering location escaping, admin access, nearest-match selection, ID-range batching, transient expiry, generation invalidation, negative caching, taxonomy fallback, query failures, and rebuild lock ownership and cleanup. These checks use WordPress stubs; they do not replace testing against a running WordPress installation.
 
 ### File Structure
 
@@ -174,6 +173,14 @@ require_once __DIR__ . '/includes/debug.php';
 
 ## Changelog
 
+### Version 1.1.3
+- Store recommendation results once using expiring WordPress transients.
+- Invalidate caches by generation on saves, settings changes, and manual clears.
+- Process distance searches using ID ranges instead of increasing offsets.
+- Skip total-result counts in taxonomy searches and defer unused location lookups.
+- Cache incomplete property data for five minutes while leaving query failures uncached.
+- Expand security and performance regression coverage to 46 checks.
+
 ### Version 1.1.2
 - Escape property location names in recommendation cards.
 - Enforce administrator permissions inside the settings page callback.
@@ -199,5 +206,5 @@ This plugin is proprietary software developed by Future Media.
 ---
 
 **Author**: Future Media  
-**Version**: 1.1.2
+**Version**: 1.1.3
 **Tested up to**: WordPress 6.4

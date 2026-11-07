@@ -45,14 +45,22 @@ function release_rebuild_lock($token) {
     }
 }
 
+function get_cache_generation() {
+    return (string) get_option('sp_cache_generation', '1');
+}
+
+function property_cache_key($post_id, $generation = null) {
+    $generation = $generation === null ? get_cache_generation() : $generation;
+    return 'sp_similar_v2_' . $generation . '_' . (int) $post_id;
+}
+
 function clear_property_cache($post_id) {
-    $cache_key = 'sp_similar_r_' . $post_id;
-    delete_transient($cache_key);
-    wp_cache_delete($cache_key);
+    // A changed listing can affect recommendations on other property pages too.
+    clear_all_caches();
 }
 
 function clear_property_cache_after_acf_save($post_id) {
-    // save_post_properties runs before ACF writes location_map, so a pin added in this save is visible only here.
+    // ACF writes the map and price after save_post_properties runs.
     if (!is_numeric($post_id) || get_post_type((int) $post_id) !== 'properties') {
         return;
     }
@@ -72,57 +80,20 @@ function cached_properties_payload($cached) {
     ];
 }
 
-function get_cached_properties($post_id) {
-    $cache_key = 'sp_similar_r_' . $post_id;
-    $cached = cached_properties_payload(wp_cache_get($cache_key));
-
-    if ($cached !== false) {
-        // debug_log('Using object cache', ['post_id' => $post_id], '📦');
-        return $cached;
-    }
-
-    $transient = cached_properties_payload(get_transient($cache_key));
-    if ($transient !== false) {
-        wp_cache_set($cache_key, $transient);
-        //debug_log('Using transient cache', ['post_id' => $post_id], '📦');
-        return $transient;
-    }
-
-    return false;
+function get_cached_properties($post_id, $generation = null) {
+    // WordPress automatically uses persistent object caching for transients when available.
+    return cached_properties_payload(get_transient(property_cache_key($post_id, $generation)));
 }
 
-function set_cached_properties($post_id, array $ids, $sorted_by_distance = false) {
-    $cache_key = 'sp_similar_r_' . $post_id;
+function set_cached_properties($post_id, array $ids, $sorted_by_distance = false, $duration = CACHE_DURATION, $generation = null) {
     $payload = [
         'ids' => array_values(array_filter(array_map('intval', $ids))),
         'sorted_by_distance' => (bool) $sorted_by_distance,
     ];
-    wp_cache_set($cache_key, $payload);
-    set_transient($cache_key, $payload, CACHE_DURATION);
+    return set_transient(property_cache_key($post_id, $generation), $payload, $duration);
 }
 
 function clear_all_caches() {
-    global $wpdb;
-    
-    // Get all transients with our prefix
-    $transients = $wpdb->get_col(
-        $wpdb->prepare(
-            "SELECT option_name FROM {$wpdb->options} 
-             WHERE option_name LIKE %s",
-            '_transient_sp_similar_%'
-        )
-    );
-    
-    $count = 0;
-    foreach ($transients as $transient) {
-        $key = str_replace('_transient_', '', $transient);
-        delete_transient($key);
-        wp_cache_delete(str_replace('_transient_', '', $key));
-        $count++;
-    }
-    
-    delete_transient('sp_coordinate_index');
-
-    // debug_log('Cleared all caches', ['count' => $count], '🧹');
-    return $count;
+    // Switch namespaces instead of scanning the options table. Old entries expire naturally.
+    return update_option('sp_cache_generation', wp_generate_uuid4(), false);
 }
