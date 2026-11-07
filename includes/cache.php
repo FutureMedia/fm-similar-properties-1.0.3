@@ -5,11 +5,15 @@ namespace SimilarProperties;
 if (!defined('ABSPATH')) exit;
 
 function clear_property_cache($post_id) {
-    delete_transient('sp_similar_' . $post_id);
+    $cache_key = 'sp_similar_r_' . $post_id;
+    delete_transient($cache_key);
+    wp_cache_delete($cache_key);
+    // FM-SIMILAR: coordinate-index — a saved pin changes who is nearby, so the shared index is rebuilt on the next search.
+    delete_transient('sp_coordinate_index');
 }
 
 function get_cached_properties($post_id) {
-    $cache_key = 'sp_similar_' . $post_id;
+    $cache_key = 'sp_similar_r_' . $post_id;
     $cached = wp_cache_get($cache_key);
     
     if ($cached !== false) {
@@ -28,7 +32,7 @@ function get_cached_properties($post_id) {
 }
 
 function set_cached_properties($post_id, $data) {
-    $cache_key = 'sp_similar_' . $post_id;
+    $cache_key = 'sp_similar_r_' . $post_id;
     wp_cache_set($cache_key, $data);
     set_transient($cache_key, $data, CACHE_DURATION);
 }
@@ -53,6 +57,8 @@ function clear_all_caches() {
         $count++;
     }
     
+    delete_transient('sp_coordinate_index');
+
     // debug_log('Cleared all caches', ['count' => $count], '🧹');
     return $count;
 }

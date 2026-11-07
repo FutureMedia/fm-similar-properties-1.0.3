@@ -68,6 +68,20 @@ add_action('admin_init', function () {
         'default' => 10
     ]);
 
+    register_setting('sp_settings', 'sp_search_radius', [
+        'type' => 'number',
+        'sanitize_callback' => function ($val) {
+            $val = floatval($val);
+            $val = ($val >= 1 && $val <= 500) ? $val : 50;
+            $current = get_option('sp_search_radius', 50);
+            if ((float) $current !== (float) $val) {
+                clear_all_caches();
+            }
+            return $val;
+        },
+        'default' => 50
+    ]);
+
     add_settings_section('sp_main', 'Main Settings', null, 'similar-properties');
 
     add_settings_field(
@@ -77,6 +91,18 @@ add_action('admin_init', function () {
             $value = get_option('sp_price_tolerance', 10);
             echo '<input type="number" name="sp_price_tolerance" value="' . esc_attr($value) . '" min="1" max="100" step="0.1" />';
             echo '<p class="description">Percentage of the property price to use as tolerance range (e.g., 20% of $500,000 = ±$100,000)</p>';
+        },
+        'similar-properties',
+        'sp_main'
+    );
+
+    add_settings_field(
+        'sp_search_radius',
+        'Search radius (km)',
+        function () {
+            $value = get_option('sp_search_radius', 50);
+            echo '<input type="number" name="sp_search_radius" value="' . esc_attr($value) . '" min="1" max="500" step="1" />';
+            echo '<p class="description">Straight-line distance from the property pin in Location on Map. Similar properties are the closest matches inside this radius. A listing with no pin still uses the location taxonomy.</p>';
         },
         'similar-properties',
         'sp_main'

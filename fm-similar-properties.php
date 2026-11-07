@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: FM - Similar Properties
- * Description: Custom plugin for displaying similar properties based on type, price range, and location.
- * Version: 1.0.3
+ * Description: Custom plugin for displaying similar properties based on type, price range, and distance from the map pin.
+ * Version: 1.1.0
  * Author: Future Media
  * Author URI: https://futuremedia.gr
  */
@@ -80,6 +80,10 @@ function activate_plugin() {
     // Set default options
     if (!get_option('sp_price_tolerance')) {
         update_option('sp_price_tolerance', 10);
+    }
+
+    if (!get_option('sp_search_radius')) {
+        update_option('sp_search_radius', 50);
     }
     
     // Create assets directory if it doesn't exist

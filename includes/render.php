@@ -36,7 +36,7 @@ function render_similar_properties($atts = []) {
     // Get all post IDs efficiently
     $posts_to_show = wp_list_pluck($query->posts, 'ID');
 
-    // Randomize if needed
+    // FM-SIMILAR: geo-radius — distance matches stay closest-first. Taxonomy matches still pick 3 at random.
     if ($total_posts > $max_display) {
         /*
         debug_log('Randomizing posts', [
@@ -45,8 +45,9 @@ function render_similar_properties($atts = []) {
         ], '🎲');
         */
 
-        // Shuffle the array of post IDs
-        shuffle($posts_to_show);
+        if (!$query->get('sp_sorted_by_distance')) {
+            shuffle($posts_to_show);
+        }
         $posts_to_show = array_slice($posts_to_show, 0, $max_display);
     }
 

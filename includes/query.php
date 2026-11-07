@@ -11,6 +11,166 @@ function clean_price($price_raw) {
     return floatval(trim($price_raw));
 }
 
+function get_search_radius_km() {
+    $radius = get_option('sp_search_radius', 50);
+    if (!is_numeric($radius) || $radius < 1 || $radius > 500) {
+        return 50.0;
+    }
+    return (float) $radius;
+}
+
+// FM-SIMILAR: location-pin — ACF google_map field "Location on Map" (location_map), stored as an array with lat/lng.
+function get_property_coordinates($post_id) {
+    $map = get_post_meta($post_id, 'location_map', true);
+    if (!is_array($map) || !isset($map['lat'], $map['lng'])) {
+        return null;
+    }
+    if (!is_numeric($map['lat']) || !is_numeric($map['lng'])) {
+        return null;
+    }
+
+    $lat = (float) $map['lat'];
+    $lng = (float) $map['lng'];
+    if ($lat < -90 || $lat > 90 || $lng < -180 || $lng > 180) {
+        return null;
+    }
+    if ($lat === 0.0 && $lng === 0.0) {
+        return null;
+    }
+
+    return ['lat' => $lat, 'lng' => $lng];
+}
+
+function distance_km($lat1, $lng1, $lat2, $lng2) {
+    $earth_radius = 6371.0;
+    $lat_delta = deg2rad($lat2 - $lat1);
+    $lng_delta = deg2rad($lng2 - $lng1);
+    $a = sin($lat_delta / 2) ** 2
+        + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($lng_delta / 2) ** 2;
+
+    return $earth_radius * (2 * atan2(sqrt($a), sqrt(1 - $a)));
+}
+
+// FM-SIMILAR: coordinate-index — one shared list of published pins, rebuilt when a property is saved.
+function get_coordinate_index() {
+    $index = get_transient('sp_coordinate_index');
+    if (is_array($index)) {
+        return $index;
+    }
+
+    global $wpdb;
+    $rows = $wpdb->get_results($wpdb->prepare(
+        "SELECT pm.post_id, pm.meta_value
+         FROM {$wpdb->postmeta} pm
+         INNER JOIN {$wpdb->posts} p ON p.ID = pm.post_id
+         WHERE pm.meta_key = %s
+           AND p.post_type = %s
+           AND p.post_status = %s
+           AND p.post_password = ''",
+        'location_map',
+        'properties',
+        'publish'
+    ));
+
+    $index = [];
+    foreach ($rows as $row) {
+        $map = maybe_unserialize($row->meta_value);
+        if (!is_array($map) || !isset($map['lat'], $map['lng']) || !is_numeric($map['lat']) || !is_numeric($map['lng'])) {
+            continue;
+        }
+        $lat = (float) $map['lat'];
+        $lng = (float) $map['lng'];
+        if ($lat < -90 || $lat > 90 || $lng < -180 || $lng > 180 || ($lat === 0.0 && $lng === 0.0)) {
+            continue;
+        }
+        $index[(int) $row->post_id] = [$lat, $lng];
+    }
+
+    set_transient('sp_coordinate_index', $index, CACHE_DURATION);
+    return $index;
+}
+
+function distance_sorted_query(array $ids) {
+    if (!$ids) {
+        // post__in 0 matches nothing. An empty WP_Query constructor would leave query vars unset.
+        $query = new \WP_Query([
+            'post_type'      => 'properties',
+            'post__in'       => [0],
+            'posts_per_page' => 1,
+            'no_found_rows'  => true,
+        ]);
+        $query->set('sp_sorted_by_distance', 1);
+        return $query;
+    }
+
+    $query = new \WP_Query([
+        'post_type'      => 'properties',
+        'post_status'    => 'publish',
+        'post__in'       => $ids,
+        'orderby'        => 'post__in',
+        'posts_per_page' => count($ids),
+        'no_found_rows'  => true,
+        'has_password'   => false,
+    ]);
+    $query->set('sp_sorted_by_distance', 1);
+    return $query;
+}
+
+// FM-SIMILAR: geo-radius — same type and price band, then keep pins inside the radius. No wider radius and no taxonomy fallback.
+function query_within_radius($post_id, array $origin, $property_type, $min_price, $max_price, $limit) {
+    $radius = get_search_radius_km();
+    $index = get_coordinate_index();
+
+    $candidate_ids = (new \WP_Query([
+        'post_type'              => 'properties',
+        'posts_per_page'         => -1,
+        'post__not_in'           => [$post_id],
+        'post_status'            => 'publish',
+        'has_password'           => false,
+        'fields'                 => 'ids',
+        'no_found_rows'          => true,
+        'update_post_term_cache' => false,
+        'meta_query'             => [
+            [
+                'key'     => 'price',
+                'value'   => [$min_price, $max_price],
+                'compare' => 'BETWEEN',
+                'type'    => 'NUMERIC',
+            ],
+        ],
+        'tax_query' => [
+            [
+                'taxonomy' => 'pr_type',
+                'field'    => 'term_id',
+                'terms'    => $property_type,
+            ],
+        ],
+    ]))->posts;
+
+    $nearby = [];
+    foreach ($candidate_ids as $candidate_id) {
+        $candidate_id = (int) $candidate_id;
+        if (!isset($index[$candidate_id])) {
+            continue;
+        }
+        [$lat, $lng] = $index[$candidate_id];
+        $distance = distance_km($origin['lat'], $origin['lng'], $lat, $lng);
+        if ($distance <= $radius) {
+            $nearby[] = ['id' => $candidate_id, 'distance' => $distance];
+        }
+    }
+
+    usort($nearby, function ($a, $b) {
+        if ($a['distance'] === $b['distance']) {
+            return $a['id'] <=> $b['id'];
+        }
+        return $a['distance'] <=> $b['distance'];
+    });
+
+    $ids = array_column(array_slice($nearby, 0, $limit), 'id');
+    return distance_sorted_query($ids);
+}
+
 function get_similar_properties($post_id, $limit = MAX_SIMILAR_PROPERTIES) {
     // Validate current post first
     if (get_post_type($post_id) !== 'properties' 
@@ -80,6 +240,15 @@ function get_similar_properties($post_id, $limit = MAX_SIMILAR_PROPERTIES) {
 
     // error_log("✅ Query range: $min_price - $max_price");
 
+    // FM-SIMILAR: geo-radius — a listing with a map pin is matched by distance. Closest results are returned in order.
+    $coords = get_property_coordinates($post_id);
+    if ($coords) {
+        $query = query_within_radius($post_id, $coords, $property_type, $min_price, $max_price, $limit);
+        set_cached_properties($post_id, $query);
+        return $query;
+    }
+
+    // FM-SIMILAR: no-pin source — fall back to the location taxonomy. Candidates still need a map pin.
     // Main query args
     $args = [
         'post_type'      => 'properties',
@@ -88,12 +257,18 @@ function get_similar_properties($post_id, $limit = MAX_SIMILAR_PROPERTIES) {
         'post_status'    => 'publish',
         'has_password'   => false,
         'meta_query'     => [
+            'relation' => 'AND',
             [
                 'key'     => 'price',
                 'value'   => [$min_price, $max_price],
                 'compare' => 'BETWEEN',
                 'type'    => 'NUMERIC'
-            ]
+            ],
+            [
+                'key'     => 'location_map',
+                'value'   => '"lat"',
+                'compare' => 'LIKE',
+            ],
         ],
         'tax_query' => [
             'relation' => 'AND',
